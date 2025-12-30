@@ -171,7 +171,7 @@ func (application *Application) NewSession(options *DestinationOptions) (*Sessio
 		return nil, fmt.Errorf("failed to create default operation options: %w", err)
 	}
 
-	if err = defaultOperationOptions.SetTimeout(5 * time.Second); err != nil {
+	if err = defaultOperationOptions.SetTimeout(10 * time.Second); err != nil {
 		return nil, fmt.Errorf("failed to set timeout: %w", err)
 	}
 
