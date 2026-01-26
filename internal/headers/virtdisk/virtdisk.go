@@ -57,7 +57,7 @@ func GetVirtualDiskSize(path string) (virtualSize uint64, physicalSize uint64, e
 		&storageType,
 		pathPtr,
 		VIRTUAL_DISK_ACCESS_GET_INFO,
-		OPEN_VIRTUAL_DISK_FLAG_NO_PARENTS, // Allow opening without parent VHDs
+		OPEN_VIRTUAL_DISK_FLAG_NO_PARENTS|OPEN_VIRTUAL_DISK_FLAG_CACHED_IO, // Allow opening VHDs in use with cached I/O
 		nil,
 		&handle,
 	)
