@@ -560,3 +560,5 @@ func buildPathRecursively(currentPath string, parts []string, startIdx int) stri
 		}
 	}
 
+	return ""
+}
