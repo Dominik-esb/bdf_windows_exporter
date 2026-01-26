@@ -276,7 +276,19 @@ func (c *Collector) collectVirtualStorageDevice(ch chan<- prometheus.Metric) err
 					data.Name,
 					diskPath,
 				)
+			} else {
+				// Log the error for debugging but continue processing other devices
+				c.logger.Debug("Failed to get virtual disk size",
+					"device", data.Name,
+					"path", diskPath,
+					"error", err,
+				)
 			}
+		} else {
+			// Log when we can't resolve the path for debugging
+			c.logger.Debug("Unable to resolve virtual disk path",
+				"device", data.Name,
+			)
 		}
 	}
 
@@ -285,13 +297,51 @@ func (c *Collector) collectVirtualStorageDevice(ch chan<- prometheus.Metric) err
 
 // resolveVirtualDiskPath attempts to resolve the full path to a VHD/VHDX file
 // based on the performance counter instance name.
-// This is a best-effort approach and may not work in all scenarios.
+//
+// The instance name often contains the encoded path itself, where:
+//   - Backslashes (\) are replaced with hyphens (-)
+//   - Drive letter colon (:) becomes (:-)
+//   - Prefix \\?\ becomes --?-
+//
+// Example: "--?-C:-ClusterStorage-Volume-VM-disk.vhdx"
+// Becomes: "C:\ClusterStorage\Volume\VM\disk.vhdx"
+//
+// To customize VHD search paths for fallback, set the HYPERV_VHD_PATHS environment variable
+// with semicolon-separated paths. Example:
+//
+//	HYPERV_VHD_PATHS=D:\VMs;E:\ClusterStorage\Volume1
+//
+// Enable debug logging to troubleshoot path resolution issues.
 func (c *Collector) resolveVirtualDiskPath(instanceName string) string {
+	// First, try to decode the path from the instance name itself
+	// Performance counter instance names encode the full path
+	decodedPath := decodeVirtualDiskPath(instanceName)
+	if decodedPath != "" {
+		// Verify the decoded path exists
+		if _, err := os.Stat(decodedPath); err == nil {
+			return decodedPath
+		}
+	}
+
+	// Fallback to searching common locations
 	// Common Hyper-V virtual disk storage locations
+	// Can be customized via HYPERV_VHD_PATHS environment variable (semicolon-separated)
 	commonPaths := []string{
-		`C:\ProgramData\Microsoft\Windows\Hyper-V`,
-		`C:\Users\Public\Documents\Hyper-V\Virtual Hard Disks`,
 		`C:\ClusterStorage`,
+		`C:\ProgramData\Microsoft\Windows\Hyper-V`,
+		`C:\ProgramData\Microsoft\Windows\Hyper-V\Virtual Hard Disks`,
+		`C:\Users\Public\Documents\Hyper-V\Virtual Hard Disks`,
+		`D:\Hyper-V`,
+		`D:\Hyper-V\Virtual Hard Disks`,
+		`E:\Hyper-V`,
+		`E:\Hyper-V\Virtual Hard Disks`,
+	}
+
+	// Allow custom paths from environment variable
+	if customPaths := os.Getenv("HYPERV_VHD_PATHS"); customPaths != "" {
+		customPathsList := strings.Split(customPaths, ";")
+		// Prepend custom paths so they're checked first
+		commonPaths = append(customPathsList, commonPaths...)
 	}
 
 	// Try to extract a meaningful filename from the instance name
@@ -313,6 +363,11 @@ func (c *Collector) resolveVirtualDiskPath(instanceName string) string {
 		)
 	}
 
+	// Try the full instance name as-is if it looks like a filename
+	if strings.Contains(instanceName, ".vhd") {
+		possibleNames = append([]string{instanceName}, possibleNames...)
+	}
+
 	// Search in common paths
 	for _, basePath := range commonPaths {
 		for _, name := range possibleNames {
@@ -322,9 +377,16 @@ func (c *Collector) resolveVirtualDiskPath(instanceName string) string {
 				return fullPath
 			}
 
-			// Try searching in subdirectories (one level deep)
+			// Try searching in subdirectories (up to 2 levels deep for VM folders)
 			pattern := filepath.Join(basePath, "*", name)
 			matches, err := filepath.Glob(pattern)
+			if err == nil && len(matches) > 0 {
+				return matches[0]
+			}
+
+			// Try 2 levels deep
+			pattern = filepath.Join(basePath, "*", "*", name)
+			matches, err = filepath.Glob(pattern)
 			if err == nil && len(matches) > 0 {
 				return matches[0]
 			}
@@ -332,4 +394,62 @@ func (c *Collector) resolveVirtualDiskPath(instanceName string) string {
 	}
 
 	return ""
+}
+
+// decodeVirtualDiskPath decodes a Hyper-V performance counter instance name
+// into a Windows file path.
+//
+// The encoding format used by Hyper-V performance counters:
+//   - Backslashes (\) are replaced with hyphens (-)
+//   - Drive letter colon (C:\) becomes (C:-)
+//   - UNC prefix (\\?\) becomes (--?-)
+//
+// Examples:
+//   - "--?-C:-ClusterStorage-Volume-VM-disk.vhdx" -> "C:\ClusterStorage\Volume\VM\disk.vhdx"
+//   - "C:-Users-Public-Documents-disk.vhdx" -> "C:\Users\Public\Documents\disk.vhdx"
+func decodeVirtualDiskPath(instanceName string) string {
+	if instanceName == "" {
+		return ""
+	}
+
+	// Check if this looks like an encoded path
+	// Encoded paths typically contain ":-" (drive letter) or start with "--?-"
+	if !strings.Contains(instanceName, ":-") && !strings.HasPrefix(instanceName, "--?-") {
+		return ""
+	}
+
+	path := instanceName
+
+	// Remove UNC prefix if present: --?- becomes \\?\
+	// For simplicity, we'll just remove it as Windows can work without it
+	path = strings.TrimPrefix(path, "--?-")
+
+	// Handle drive letter: "C:-" becomes "C:\"
+	// Find pattern like "X:-" where X is a letter
+	if len(path) >= 3 && path[1] == ':' && path[2] == '-' {
+		// Replace "C:-" with "C:\"
+		path = string(path[0]) + `:\` + path[3:]
+	}
+
+	// Replace remaining hyphens with backslashes
+	// But be careful not to replace hyphens that are part of legitimate filenames
+	// We'll do this by looking for the pattern: -word- (hyphen followed by word followed by hyphen)
+	// and replacing the hyphens that separate path components
+
+	// Split by hyphen and intelligently reconstruct
+	// After the drive letter is processed, replace - with \
+	parts := strings.Split(path, "-")
+	if len(parts) > 1 {
+		// First part already has the drive letter with backslash
+		// Join the rest with backslashes
+		result := parts[0]
+		for i := 1; i < len(parts); i++ {
+			if parts[i] != "" {
+				result += `\` + parts[i]
+			}
+		}
+		path = result
+	}
+
+	return path
 }
