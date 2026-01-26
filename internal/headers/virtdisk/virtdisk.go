@@ -51,13 +51,13 @@ func GetVirtualDiskSize(path string) (virtualSize uint64, physicalSize uint64, e
 		storageType.DeviceID = VIRTUAL_STORAGE_TYPE_DEVICE_ISO
 	}
 
-	// Open the virtual disk
+	// Open the virtual disk with flags that allow opening even when in use
 	var handle windows.Handle
 	err = OpenVirtualDisk(
 		&storageType,
 		pathPtr,
 		VIRTUAL_DISK_ACCESS_GET_INFO,
-		OPEN_VIRTUAL_DISK_FLAG_NONE,
+		OPEN_VIRTUAL_DISK_FLAG_NO_PARENTS, // Allow opening without parent VHDs
 		nil,
 		&handle,
 	)
