@@ -255,27 +255,20 @@ func (c *Collector) collectVirtualStorageDevice(ch chan<- prometheus.Metric) err
 		)
 
 		// Attempt to get disk size information
-		// The Name field typically contains the VM name and VHD name
-		// Format examples: "VMName_VHDName" or similar
+		// The Name field contains the encoded path to the VHD/VHDX file
 		diskPath := c.resolveVirtualDiskPath(data.Name)
-		if diskPath != "" {
-			virtualSize, physicalSize, err := virtdisk.GetVirtualDiskSize(diskPath)
-			if err == nil {
-				ch <- prometheus.MustNewConstMetric(
-					c.virtualStorageDeviceVirtualSizeBytes,
-					prometheus.GaugeValue,
-					float64(virtualSize),
-					data.Name,
-					diskPath,
-				)
 
-				ch <- prometheus.MustNewConstMetric(
-					c.virtualStorageDevicePhysicalSizeBytes,
-					prometheus.GaugeValue,
-					float64(physicalSize),
-					data.Name,
-					diskPath,
-				)
+		// Always emit metrics with -1 to indicate "unknown" if we can't get the size
+		virtualSize := float64(-1)
+		physicalSize := float64(-1)
+		resolvedPath := "unknown"
+
+		if diskPath != "" {
+			resolvedPath = diskPath
+			vSize, pSize, err := virtdisk.GetVirtualDiskSize(diskPath)
+			if err == nil {
+				virtualSize = float64(vSize)
+				physicalSize = float64(pSize)
 			} else {
 				// Log the error for debugging but continue processing other devices
 				c.logger.Debug("Failed to get virtual disk size",
@@ -290,6 +283,23 @@ func (c *Collector) collectVirtualStorageDevice(ch chan<- prometheus.Metric) err
 				"device", data.Name,
 			)
 		}
+
+		// Always emit the size metrics (with -1 if unknown)
+		ch <- prometheus.MustNewConstMetric(
+			c.virtualStorageDeviceVirtualSizeBytes,
+			prometheus.GaugeValue,
+			virtualSize,
+			data.Name,
+			resolvedPath,
+		)
+
+		ch <- prometheus.MustNewConstMetric(
+			c.virtualStorageDevicePhysicalSizeBytes,
+			prometheus.GaugeValue,
+			physicalSize,
+			data.Name,
+			resolvedPath,
+		)
 	}
 
 	return nil
