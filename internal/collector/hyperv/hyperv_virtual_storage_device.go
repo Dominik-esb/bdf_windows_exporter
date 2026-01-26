@@ -19,7 +19,11 @@ package hyperv
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
 
+	"github.com/prometheus-community/windows_exporter/internal/headers/virtdisk"
 	"github.com/prometheus-community/windows_exporter/internal/pdh"
 	"github.com/prometheus-community/windows_exporter/internal/types"
 	"github.com/prometheus/client_golang/prometheus"
@@ -42,6 +46,8 @@ type collectorVirtualStorageDevice struct {
 	virtualStorageDeviceLowerQueueLength         *prometheus.Desc // \Hyper-V Virtual Storage Device(*)\Lower Queue Length
 	virtualStorageDeviceLowerLatency             *prometheus.Desc // \Hyper-V Virtual Storage Device(*)\Lower Latency
 	virtualStorageDeviceIOQuotaReplenishmentRate *prometheus.Desc // \Hyper-V Virtual Storage Device(*)\IO Quota Replenishment Rate
+	virtualStorageDeviceVirtualSizeBytes         *prometheus.Desc // Virtual size of the VHD/VHDX file
+	virtualStorageDevicePhysicalSizeBytes        *prometheus.Desc // Physical size of the VHD/VHDX file on disk
 }
 
 type perfDataCounterValuesVirtualStorageDevice struct {
@@ -141,6 +147,18 @@ func (c *Collector) buildVirtualStorageDevice() error {
 		[]string{"device"},
 		nil,
 	)
+	c.virtualStorageDeviceVirtualSizeBytes = prometheus.NewDesc(
+		prometheus.BuildFQName(types.Namespace, Name, "virtual_storage_device_size_bytes"),
+		"Virtual size of the VHD/VHDX file in bytes.",
+		[]string{"device", "path"},
+		nil,
+	)
+	c.virtualStorageDevicePhysicalSizeBytes = prometheus.NewDesc(
+		prometheus.BuildFQName(types.Namespace, Name, "virtual_storage_device_physical_size_bytes"),
+		"Physical size of the VHD/VHDX file on disk in bytes.",
+		[]string{"device", "path"},
+		nil,
+	)
 
 	return nil
 }
@@ -235,7 +253,83 @@ func (c *Collector) collectVirtualStorageDevice(ch chan<- prometheus.Metric) err
 			data.VirtualStorageDeviceIOQuotaReplenishmentRate,
 			data.Name,
 		)
+
+		// Attempt to get disk size information
+		// The Name field typically contains the VM name and VHD name
+		// Format examples: "VMName_VHDName" or similar
+		diskPath := c.resolveVirtualDiskPath(data.Name)
+		if diskPath != "" {
+			virtualSize, physicalSize, err := virtdisk.GetVirtualDiskSize(diskPath)
+			if err == nil {
+				ch <- prometheus.MustNewConstMetric(
+					c.virtualStorageDeviceVirtualSizeBytes,
+					prometheus.GaugeValue,
+					float64(virtualSize),
+					data.Name,
+					diskPath,
+				)
+
+				ch <- prometheus.MustNewConstMetric(
+					c.virtualStorageDevicePhysicalSizeBytes,
+					prometheus.GaugeValue,
+					float64(physicalSize),
+					data.Name,
+					diskPath,
+				)
+			}
+		}
 	}
 
 	return nil
+}
+
+// resolveVirtualDiskPath attempts to resolve the full path to a VHD/VHDX file
+// based on the performance counter instance name.
+// This is a best-effort approach and may not work in all scenarios.
+func (c *Collector) resolveVirtualDiskPath(instanceName string) string {
+	// Common Hyper-V virtual disk storage locations
+	commonPaths := []string{
+		`C:\ProgramData\Microsoft\Windows\Hyper-V`,
+		`C:\Users\Public\Documents\Hyper-V\Virtual Hard Disks`,
+		`C:\ClusterStorage`,
+	}
+
+	// Try to extract a meaningful filename from the instance name
+	// Instance names might be in format like "VMName_DiskName" or just "DiskName"
+	possibleNames := []string{
+		instanceName + ".vhdx",
+		instanceName + ".vhd",
+		instanceName + ".vhdset",
+	}
+
+	// Also try splitting on underscore and using the last part
+	parts := strings.Split(instanceName, "_")
+	if len(parts) > 1 {
+		lastPart := parts[len(parts)-1]
+		possibleNames = append(possibleNames,
+			lastPart+".vhdx",
+			lastPart+".vhd",
+			lastPart+".vhdset",
+		)
+	}
+
+	// Search in common paths
+	for _, basePath := range commonPaths {
+		for _, name := range possibleNames {
+			// Try direct path
+			fullPath := filepath.Join(basePath, name)
+			if _, err := os.Stat(fullPath); err == nil {
+				return fullPath
+			}
+
+			// Try searching in subdirectories (one level deep)
+			pattern := filepath.Join(basePath, "*", name)
+			matches, err := filepath.Glob(pattern)
+			if err == nil && len(matches) > 0 {
+				return matches[0]
+			}
+		}
+	}
+
+	return ""
 }
