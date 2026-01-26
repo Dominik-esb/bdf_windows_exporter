@@ -39,7 +39,7 @@ func OpenVirtualDisk(
 	parameters *OPEN_VIRTUAL_DISK_PARAMETERS,
 	handle *windows.Handle,
 ) error {
-	r1, _, err := procOpenVirtualDisk.Call(
+	r1, _, _ := procOpenVirtualDisk.Call(
 		uintptr(unsafe.Pointer(virtualStorageType)),
 		uintptr(unsafe.Pointer(path)),
 		uintptr(virtualDiskAccessMask),
@@ -48,7 +48,7 @@ func OpenVirtualDisk(
 		uintptr(unsafe.Pointer(handle)),
 	)
 	if r1 != 0 {
-		return err
+		return windows.Errno(r1)
 	}
 	return nil
 }
@@ -60,14 +60,14 @@ func GetVirtualDiskInformation(
 	virtualDiskInfo *GET_VIRTUAL_DISK_INFO,
 	sizeUsed *uint32,
 ) error {
-	r1, _, err := procGetVirtualDiskInformation.Call(
+	r1, _, _ := procGetVirtualDiskInformation.Call(
 		uintptr(virtualDiskHandle),
 		uintptr(unsafe.Pointer(virtualDiskInfoSize)),
 		uintptr(unsafe.Pointer(virtualDiskInfo)),
 		uintptr(unsafe.Pointer(sizeUsed)),
 	)
 	if r1 != 0 {
-		return err
+		return windows.Errno(r1)
 	}
 	return nil
 }
