@@ -334,14 +334,11 @@ func (c *Collector) resolveVirtualDiskPath(instanceName string) string {
 		// Verify the decoded path exists
 		if _, err := os.Stat(decodedPath); err == nil {
 			return decodedPath
-		}
-		c.logger.Debug("Decoded path does not exist",
-			"decodedPath", decodedPath,
-			"error", err,
-		)
-	}
-		if _, err := os.Stat(decodedPath); err == nil {
-			return decodedPath
+		} else {
+			c.logger.Debug("Decoded path does not exist",
+				"decodedPath", decodedPath,
+				"error", err,
+			)
 		}
 	}
 
