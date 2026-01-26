@@ -327,7 +327,19 @@ func (c *Collector) resolveVirtualDiskPath(instanceName string) string {
 	// Performance counter instance names encode the full path
 	decodedPath := decodeVirtualDiskPath(instanceName)
 	if decodedPath != "" {
+		c.logger.Debug("Decoded virtual disk path",
+			"device", instanceName,
+			"decodedPath", decodedPath,
+		)
 		// Verify the decoded path exists
+		if _, err := os.Stat(decodedPath); err == nil {
+			return decodedPath
+		}
+		c.logger.Debug("Decoded path does not exist",
+			"decodedPath", decodedPath,
+			"error", err,
+		)
+	}
 		if _, err := os.Stat(decodedPath); err == nil {
 			return decodedPath
 		}
@@ -414,9 +426,12 @@ func (c *Collector) resolveVirtualDiskPath(instanceName string) string {
 //   - Drive letter colon (C:\) becomes (C:-)
 //   - UNC prefix (\\?\) becomes (--?-)
 //
+// Since directory names can contain hyphens, we try multiple interpretations
+// and return the first one that exists on disk.
+//
 // Examples:
 //   - "--?-C:-ClusterStorage-Volume-VM-disk.vhdx" -> "C:\ClusterStorage\Volume\VM\disk.vhdx"
-//   - "C:-Users-Public-Documents-disk.vhdx" -> "C:\Users\Public\Documents\disk.vhdx"
+//   - "C:-ClusterStorage-HAMC010011-FTT2-CSV01-VM-disk.vhdx" -> "C:\ClusterStorage\HAMC010011-FTT2-CSV01\VM\disk.vhdx"
 func decodeVirtualDiskPath(instanceName string) string {
 	if instanceName == "" {
 		return ""
@@ -436,30 +451,84 @@ func decodeVirtualDiskPath(instanceName string) string {
 
 	// Handle drive letter: "C:-" becomes "C:\"
 	// Find pattern like "X:-" where X is a letter
-	if len(path) >= 3 && path[1] == ':' && path[2] == '-' {
-		// Replace "C:-" with "C:\"
-		path = string(path[0]) + `:\` + path[3:]
+	if len(path) < 3 || path[1] != ':' || path[2] != '-' {
+		return ""
 	}
 
-	// Replace remaining hyphens with backslashes
-	// But be careful not to replace hyphens that are part of legitimate filenames
-	// We'll do this by looking for the pattern: -word- (hyphen followed by word followed by hyphen)
-	// and replacing the hyphens that separate path components
+	driveLetter := string(path[0])
+	remainingPath := path[3:] // Everything after "C:-"
 
-	// Split by hyphen and intelligently reconstruct
-	// After the drive letter is processed, replace - with \
-	parts := strings.Split(path, "-")
-	if len(parts) > 1 {
-		// First part already has the drive letter with backslash
-		// Join the rest with backslashes
-		result := parts[0]
-		for i := 1; i < len(parts); i++ {
-			if parts[i] != "" {
-				result += `\` + parts[i]
+	// The simple approach: replace all hyphens with backslashes
+	// This works when directory names don't contain hyphens
+	simplePath := driveLetter + `:\` + strings.ReplaceAll(remainingPath, "-", `\`)
+
+	// Try the simple path first
+	if fileExists(simplePath) {
+		return simplePath
+	}
+
+	// If simple approach didn't work, directory names likely contain hyphens
+	// Split by hyphens and try progressively merging parts
+	parts := strings.Split(remainingPath, "-")
+
+	// Try to build path by treating consecutive parts as one directory name
+	// when separated hyphens don't create a valid path
+	return tryPathCombinations(driveLetter+`:\`, parts)
+}
+
+// fileExists checks if a file exists
+func fileExists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
+}
+
+// tryPathCombinations tries different combinations of joining parts
+// to find a valid file path, accounting for hyphens in directory names
+func tryPathCombinations(basePath string, parts []string) string {
+	if len(parts) == 0 {
+		return ""
+	}
+
+	// Start building path from the beginning
+	var currentPath string
+
+	for i := 0; i < len(parts); i++ {
+		if parts[i] == "" {
+			continue
+		}
+
+		// Try adding this part as a new path component
+		testPath := filepath.Join(basePath, parts[i])
+
+		// If this is the last part and it has a file extension, check if it exists
+		if i == len(parts)-1 && (strings.Contains(parts[i], ".vhd") || strings.Contains(parts[i], ".vmgs")) {
+			if currentPath != "" {
+				finalPath := filepath.Join(currentPath, parts[i])
+				if fileExists(finalPath) {
+					return finalPath
+				}
+			}
+			// Also try without the accumulated path
+			if fileExists(testPath) {
+				return testPath
 			}
 		}
-		path = result
+
+		// Check if this directory exists
+		if fileInfo, err := os.Stat(testPath); err == nil && fileInfo.IsDir() {
+			currentPath = testPath
+			basePath = currentPath
+		} else if i < len(parts)-1 {
+			// Try merging with next part (this part might have a hyphen in its name)
+			merged := parts[i] + "-" + parts[i+1]
+			testPath = filepath.Join(basePath, merged)
+			if fileInfo, err := os.Stat(testPath); err == nil && fileInfo.IsDir() {
+				currentPath = testPath
+				basePath = currentPath
+				i++ // Skip the next part since we merged it
+			}
+		}
 	}
 
-	return path
+	return ""
 }
