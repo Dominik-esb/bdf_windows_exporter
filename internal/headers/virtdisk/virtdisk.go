@@ -52,11 +52,12 @@ func GetVirtualDiskSize(path string) (virtualSize uint64, physicalSize uint64, e
 	}
 
 	// Open the virtual disk with flags that allow opening even when in use
+	// Use READ access mask which includes ATTACH_RO, DETACH, and GET_INFO
 	var handle windows.Handle
 	err = OpenVirtualDisk(
 		&storageType,
 		pathPtr,
-		VIRTUAL_DISK_ACCESS_GET_INFO,
+		VIRTUAL_DISK_ACCESS_READ,
 		OPEN_VIRTUAL_DISK_FLAG_NO_PARENTS|OPEN_VIRTUAL_DISK_FLAG_CACHED_IO, // Allow opening VHDs in use with cached I/O
 		nil,
 		&handle,
