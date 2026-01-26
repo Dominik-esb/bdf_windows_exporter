@@ -494,46 +494,69 @@ func tryPathCombinations(basePath string, parts []string) string {
 		return ""
 	}
 
-	// Start building path from the beginning
-	var currentPath string
+	// Build path iteratively, merging parts with hyphens when necessary
+	return buildPathRecursively(basePath, parts, 0)
+}
 
-	for i := 0; i < len(parts); i++ {
-		if parts[i] == "" {
-			continue
+// buildPathRecursively builds a path by trying different combinations of merging hyphenated parts
+func buildPathRecursively(currentPath string, parts []string, startIdx int) string {
+	if startIdx >= len(parts) {
+		return ""
+	}
+
+	// Check if we've reached the filename (contains .vhd, .vhdx, or .vmgs extension)
+	if strings.Contains(parts[startIdx], ".vhd") || strings.Contains(parts[startIdx], ".vmgs") {
+		// This should be the last part - the filename
+		filePath := filepath.Join(currentPath, parts[startIdx])
+		if fileExists(filePath) {
+			return filePath
 		}
+		return ""
+	}
 
-		// Try adding this part as a new path component
-		testPath := filepath.Join(basePath, parts[i])
+	// Try progressively longer combinations by merging parts with hyphens
+	for endIdx := startIdx; endIdx < len(parts); endIdx++ {
+		// If this part contains a file extension, treat it as the filename
+		if strings.Contains(parts[endIdx], ".vhd") || strings.Contains(parts[endIdx], ".vmgs") {
+			// Build the directory name from startIdx to endIdx-1
+			if endIdx > startIdx {
+				dirParts := parts[startIdx:endIdx]
+				dirName := strings.Join(dirParts, "-")
+				testPath := filepath.Join(currentPath, dirName)
 
-		// If this is the last part and it has a file extension, check if it exists
-		if i == len(parts)-1 && (strings.Contains(parts[i], ".vhd") || strings.Contains(parts[i], ".vmgs")) {
-			if currentPath != "" {
-				finalPath := filepath.Join(currentPath, parts[i])
-				if fileExists(finalPath) {
-					return finalPath
+				// Check if this directory exists
+				if fileInfo, err := os.Stat(testPath); err == nil && fileInfo.IsDir() {
+					// Now try the filename
+					fileName := parts[endIdx]
+					filePath := filepath.Join(testPath, fileName)
+					if fileExists(filePath) {
+						return filePath
+					}
 				}
 			}
-			// Also try without the accumulated path
-			if fileExists(testPath) {
-				return testPath
+
+			// Also try with the filename directly
+			fileName := parts[endIdx]
+			filePath := filepath.Join(currentPath, fileName)
+			if fileExists(filePath) {
+				return filePath
 			}
+			break
 		}
+
+		// Build directory name by joining parts from startIdx to endIdx with hyphens
+		dirParts := parts[startIdx : endIdx+1]
+		dirName := strings.Join(dirParts, "-")
+		testPath := filepath.Join(currentPath, dirName)
 
 		// Check if this directory exists
 		if fileInfo, err := os.Stat(testPath); err == nil && fileInfo.IsDir() {
-			currentPath = testPath
-			basePath = currentPath
-		} else if i < len(parts)-1 {
-			// Try merging with next part (this part might have a hyphen in its name)
-			merged := parts[i] + "-" + parts[i+1]
-			testPath = filepath.Join(basePath, merged)
-			if fileInfo, err := os.Stat(testPath); err == nil && fileInfo.IsDir() {
-				currentPath = testPath
-				basePath = currentPath
-				i++ // Skip the next part since we merged it
+			// This is a valid directory, recurse with the next parts
+			result := buildPathRecursively(testPath, parts, endIdx+1)
+			if result != "" {
+				return result
 			}
+			// If recursion didn't find anything, try merging more parts
 		}
 	}
 
-	return ""
-}
