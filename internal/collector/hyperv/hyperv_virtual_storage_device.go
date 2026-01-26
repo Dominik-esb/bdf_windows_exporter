@@ -470,7 +470,15 @@ func decodeVirtualDiskPath(instanceName string) string {
 
 	// Try to build path by treating consecutive parts as one directory name
 	// when separated hyphens don't create a valid path
-	return tryPathCombinations(driveLetter+`:\`, parts)
+	combinedPath := tryPathCombinations(driveLetter+`:\`, parts)
+
+	// If nothing worked, return the simple path anyway for debugging
+	// (caller will see it doesn't exist)
+	if combinedPath == "" {
+		return simplePath
+	}
+
+	return combinedPath
 }
 
 // fileExists checks if a file exists
