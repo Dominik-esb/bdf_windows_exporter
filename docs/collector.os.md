@@ -19,6 +19,7 @@ None
 | `windows_os_hostname`                | Labelled system hostname information as provided by ComputerSystem.DNSHostName and ComputerSystem.Domain                                                       | gauge | `domain`, `fqdn`, `hostname`                                                                                    |
 | `windows_os_info`                    | Contains full product name & version in labels. Note that the `major_version` for Windows 11 is "10"; a build number greater than 22000 represents Windows 11. | gauge | `product`, `version`, `major_version`, `minor_version`, `build_number`, `revision`, `installation_type`         |
 | `windows_os_install_time_timestamp`  | Unix timestamp of OS installation time                                                                                                                         | gauge | None                                                                                                            |
+| `windows_os_wmi_health`              | WMI health status. 1 if WMI is healthy and responding, 0 if WMI is broken or not responding                                                                    | gauge | None                                                                                                            |
 
 ### Example metric
 
@@ -32,6 +33,9 @@ windows_os_info{build_number="19045",installation_type="Client",major_version="1
 # HELP windows_os_install_time_timestamp Unix timestamp of OS installation time
 # TYPE windows_os_install_time_timestamp gauge
 windows_os_install_time_timestamp 1.6725312e+09
+# HELP windows_os_wmi_health WMI health status. 1 if WMI is healthy and responding, 0 if WMI is broken or not responding
+# TYPE windows_os_wmi_health gauge
+windows_os_wmi_health 1
 ```
 
 ## Useful queries

@@ -44,11 +44,15 @@ var ConfigDefaults = Config{}
 type Collector struct {
 	config Config
 
+	miSession *mi.Session
+	miQuery   mi.Query
+
 	installTimeTimestamp float64
 
 	hostname      *prometheus.Desc
 	osInformation *prometheus.Desc
 	installTime   *prometheus.Desc
+	wmiHealth     *prometheus.Desc
 }
 
 func New(config *Config) *Collector {
@@ -75,7 +79,20 @@ func (c *Collector) Close() error {
 	return nil
 }
 
-func (c *Collector) Build(_ *slog.Logger, _ *mi.Session) error {
+func (c *Collector) Build(_ *slog.Logger, miSession *mi.Session) error {
+	if miSession == nil {
+		return errors.New("miSession is nil")
+	}
+
+	c.miSession = miSession
+
+	miQuery, err := mi.NewQuery("SELECT CSName FROM Win32_OperatingSystem")
+	if err != nil {
+		return fmt.Errorf("failed to create WMI query: %w", err)
+	}
+
+	c.miQuery = miQuery
+
 	productName, revision, installationType, err := c.getWindowsVersion()
 	if err != nil {
 		return fmt.Errorf("failed to get Windows version: %w", err)
@@ -128,6 +145,13 @@ func (c *Collector) Build(_ *slog.Logger, _ *mi.Session) error {
 		nil,
 	)
 
+	c.wmiHealth = prometheus.NewDesc(
+		prometheus.BuildFQName(types.Namespace, Name, "wmi_health"),
+		"WMI health status. 1 if WMI is healthy and responding, 0 if WMI is broken or not responding",
+		nil,
+		nil,
+	)
+
 	return nil
 }
 
@@ -151,6 +175,8 @@ func (c *Collector) Collect(ch chan<- prometheus.Metric) error {
 	if err := c.collectHostname(ch); err != nil {
 		errs = append(errs, fmt.Errorf("failed to collect hostname metrics: %w", err))
 	}
+
+	c.collectWMIHealth(ch)
 
 	return errors.Join(errs...)
 }
@@ -232,4 +258,28 @@ func (c *Collector) getInstallTime() (float64, error) {
 	}
 
 	return float64(installDate), nil
+}
+
+// win32OperatingSystem is a struct for the Win32_OperatingSystem WMI class.
+// Only CSName is needed to verify WMI is working.
+type win32OperatingSystem struct {
+	CSName string `mi:"CSName"`
+}
+
+// collectWMIHealth queries WMI to check if it's healthy.
+// If the query succeeds, it reports 1 (healthy), otherwise 0 (unhealthy).
+func (c *Collector) collectWMIHealth(ch chan<- prometheus.Metric) {
+	var dst []win32OperatingSystem
+
+	healthValue := 1.0
+
+	if err := c.miSession.Query(&dst, mi.NamespaceRootCIMv2, c.miQuery); err != nil {
+		healthValue = 0.0
+	}
+
+	ch <- prometheus.MustNewConstMetric(
+		c.wmiHealth,
+		prometheus.GaugeValue,
+		healthValue,
+	)
 }
